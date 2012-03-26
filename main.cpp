@@ -8,7 +8,7 @@ int main(int argc, char *argv[]) {
     const gchar *nano_str;
     guint major, minor, micro, nano;
 
-    gst_init(&argc, &argv);
+    gst_init(NULL, NULL);
 
     gst_version(&major, &minor, &micro, &nano);
 
