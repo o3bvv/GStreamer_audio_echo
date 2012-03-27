@@ -1,13 +1,8 @@
 #include <stdio.h>
 #include <gst/gst.h>
 
-using namespace std;
-
 int main(int argc, char *argv[]) {
     
-    const gchar *nano_str;
-    guint major, minor, micro, nano;
-
     gst_init(NULL, NULL);
 
     gst_version(&major, &minor, &micro, &nano);
