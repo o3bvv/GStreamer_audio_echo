@@ -17,6 +17,7 @@ void linkPads_src2Bin();
 void linkRtpBin_PAD_ADDED_callback();
 
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data);
+GstElement* createRtpDecoder();
 
 void registerBusCall();
 static gboolean busCall(GstBus *bus, GstMessage *msg, gpointer data);
@@ -149,6 +150,53 @@ void linkRtpBin_PAD_ADDED_callback(){
 
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
 	g_print ("New payload on pad: %s\n", GST_PAD_NAME (new_pad));
+
+	GstElement* rtpDecoder = createRtpDecoder();
+
+	g_print ("\tLinking pad and RTP-decoder.\n");
+	GstPad* sinkpad = gst_element_get_static_pad (rtpDecoder, "sink");
+	g_assert (gst_pad_link (new_pad, sinkpad) == GST_PAD_LINK_OK);
+	gst_object_unref (sinkpad);
+}
+
+
+GstElement* createRtpDecoder(){
+	g_print ("\tCreating RTP-decoder.\n");
+
+	GstElement *bin, *queue, *depay, *decoder;
+
+	g_print ("\t\tCreating bin.\n");
+	bin = gst_bin_new (NULL);
+	g_assert(bin);
+
+	g_print ("\t\tCreating queue.\n");
+	queue   = gst_element_factory_make ("queue",        NULL);
+	g_assert(queue);
+
+	g_print ("\t\tCreating depay.\n");
+	depay   = gst_element_factory_make ("rtpg726depay", NULL);
+	g_assert(depay);
+
+	g_print ("\t\tCreating G.726 decoder.\n");
+	decoder = gst_element_factory_make ("ffdec_g726",   NULL);
+	g_assert(decoder);
+
+	gst_bin_add_many (GST_BIN (bin), queue, depay, decoder, NULL);
+
+	g_print ("\t\tAdding ghost pads.\n");
+	GstPad* pad = gst_element_get_static_pad (queue, "sink");
+	gst_element_add_pad (bin, gst_ghost_pad_new ("sink", pad));
+	gst_object_unref (GST_OBJECT (pad));
+
+	pad = gst_element_get_static_pad (decoder, "src");
+	gst_element_add_pad (bin, gst_ghost_pad_new ("src", pad));
+	gst_object_unref (GST_OBJECT (pad));
+
+	g_print ("\t\tAdding to pipeline.\n");
+	gst_bin_add (GST_BIN (pipeline), bin);
+	g_assert (gst_element_link_many (queue, depay, decoder, NULL));
+
+	return bin;
 }
 
 void registerBusCall(){
