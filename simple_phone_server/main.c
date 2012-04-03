@@ -6,6 +6,17 @@ void getParametersOrExit(int argc, char *argv[]);
 void getParameters(int argc, char *argv[]);
 void printParameters();
 
+void createPrimaryElements();
+void createRtpBin();
+void createUdpSource();
+
+void addPrimaryElements();
+
+void linkPrimaryElements();
+void linkPads_src2Bin();
+void linkRtpBin_PAD_ADDED_callback();
+
+static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data);
 
 void registerBusCall();
 static gboolean busCall(GstBus *bus, GstMessage *msg, gpointer data);
@@ -25,12 +36,18 @@ int listenPort = DEFAULT_UDP_PORT;
 
 GMainLoop  *loop;
 
-GstElement *pipeline, *rtpbin, *liveadder;
+GstElement *pipeline;
+GstElement *rtpBin, *udpSource;
+GstElement *liveadder;
 
 int main(int argc, char *argv[]) {
     gst_init(NULL, NULL);
 
 	getParametersOrExit(argc, argv);
+
+	createPrimaryElements();
+	addPrimaryElements();
+	linkPrimaryElements();
 
 	loop = g_main_loop_new (NULL, FALSE);
 	registerBusCall();
@@ -60,6 +77,78 @@ void getParameters(int argc, char *argv[]){
 void printParameters(){
 	g_print ("Connection parameters:\n");
 	g_print ("\tPort to listen: %d.\n", listenPort);
+}
+
+void createPrimaryElements(){
+	g_print ("Creating primary elements.\n");
+
+	g_print ("\tCreating pipeline.\n");
+	pipeline  = gst_pipeline_new ("simple-phone");
+	
+	createUdpSource();
+	createRtpBin();
+}
+
+void createRtpBin(){
+	g_print ("\tCreating RTP-bin.\n");
+	rtpBin = gst_element_factory_make ("gstrtpbin", "rtpbin");
+	g_assert (rtpBin);
+	g_object_set (G_OBJECT (rtpBin), "autoremove", TRUE, NULL);
+}
+
+void createUdpSource(){
+	g_print ("\t\tCreating UDP source.\n");
+
+	udpSource = gst_element_factory_make ("udpsrc", "net-input");
+	g_assert (udpSource);
+
+	GstCaps *caps = gst_caps_new_simple (
+		"application/x-rtp",	     
+		"media",           G_TYPE_STRING, "audio",
+		"clock-rate",      G_TYPE_INT,    8000,
+		"encoding-name",   G_TYPE_STRING, "G726",
+		"encoding-params", G_TYPE_STRING, "1",
+		"channels",        G_TYPE_INT,    1,
+		"payload",         G_TYPE_INT,    96,
+		NULL);
+	g_assert (caps);	
+
+	g_object_set (G_OBJECT (udpSource), "caps", caps,      NULL);
+	g_object_set (G_OBJECT (udpSource), "port", listenPort, NULL);
+
+	gst_caps_unref (caps);
+}
+
+void addPrimaryElements(){
+	g_print ("Adding primary elements.\n");
+	gst_bin_add_many (GST_BIN (pipeline), rtpBin, udpSource, NULL);
+}
+
+void linkPrimaryElements(){
+	g_print ("Linking primary elements.\n");
+	linkPads_src2Bin();
+	linkRtpBin_PAD_ADDED_callback();
+}
+
+void linkPads_src2Bin(){
+	g_print ("\tLinking UDP-source and RTP-bin.\n");
+
+	GstPad* srcpad = gst_element_get_static_pad (udpSource, "src");
+	GstPad* sinkpad = gst_element_get_request_pad (rtpBin, "recv_rtp_sink_0");
+
+	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
+
+	gst_object_unref (srcpad);
+	gst_object_unref (sinkpad);
+}
+
+void linkRtpBin_PAD_ADDED_callback(){
+	g_print ("\tAdding RTP-bin \"pad-added\" callback.\n");
+	g_signal_connect (rtpBin, "pad-added", G_CALLBACK (rtpBinPadAdded), NULL);
+}
+
+static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
+	g_print ("New payload on pad: %s\n", GST_PAD_NAME (new_pad));
 }
 
 void registerBusCall(){
