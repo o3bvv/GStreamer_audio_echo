@@ -2,6 +2,11 @@
 #include <stdio.h>
 #include <gst/gst.h>
 
+void getParametersOrExit(int argc, char *argv[]);
+void getParameters(int argc, char *argv[]);
+void printParameters();
+
+
 void registerBusCall();
 static gboolean busCall(GstBus *bus, GstMessage *msg, gpointer data);
 
@@ -25,7 +30,7 @@ GstElement *pipeline, *rtpbin, *liveadder;
 int main(int argc, char *argv[]) {
     gst_init(NULL, NULL);
 
-	
+	getParametersOrExit(argc, argv);
 
 	loop = g_main_loop_new (NULL, FALSE);
 	registerBusCall();
@@ -36,7 +41,26 @@ int main(int argc, char *argv[]) {
     return EXIT_NORMAL;
 }
 
+void getParametersOrExit(int argc, char *argv[]){
+	getParameters(argc, argv);
+	printParameters();
+}
 
+void getParameters(int argc, char *argv[]){
+
+	if (argc < 2) {
+		return;
+	}
+
+	g_print ("Getting parameters.\n");
+	g_print ("\tGetting port to listen.\n");
+	listenPort = atoi(argv[1]);
+}
+
+void printParameters(){
+	g_print ("Connection parameters:\n");
+	g_print ("\tPort to listen: %d.\n", listenPort);
+}
 
 void registerBusCall(){
 	g_print ("Registering bus call.\n");
