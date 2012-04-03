@@ -25,6 +25,10 @@ static gboolean busCall(GstBus *bus, GstMessage *msg, gpointer data);
 void runLoop();
 void cleanUp();
 
+void pipeline_run();
+void pipeline_pause();
+void pipeline_stop();
+
 #define EXIT_NORMAL 0
 #define EXIT_NOT_ENOUGH_PARAMETERS    -1
 #define EXIT_ELEMENT_CREATION_FAILURE -2
@@ -151,7 +155,7 @@ void linkRtpBin_PAD_ADDED_callback(){
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
 	g_print ("New payload on pad: %s\n", GST_PAD_NAME (new_pad));
 
-	gst_element_set_state(pipeline, GST_STATE_PAUSED);
+	pipeline_pause();
 
 	GstElement* rtpDecoder = createRtpDecoder();
 
@@ -180,7 +184,7 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 	gst_object_unref (srcpad);
 	gst_object_unref (sinkpad);
 
-	gst_element_set_state (pipeline, GST_STATE_PLAYING);
+	pipeline_run();
 }
 
 
@@ -263,17 +267,31 @@ static gboolean busCall (GstBus *bus, GstMessage *msg, gpointer data) {
 }
 
 void runLoop(){
-	gst_element_set_state (pipeline, GST_STATE_PLAYING);
-	
+	pipeline_run();	
 	g_print ("Running...\n");
 	g_main_loop_run (loop);
 }
 
 void cleanUp(){
-	g_print ("Returned, stopping playback\n");
-	gst_element_set_state (pipeline, GST_STATE_NULL);
+	g_print ("Returned from main loop.\n");
+	pipeline_stop();
 
 	g_print ("Deleting pipeline\n");
 	gst_object_unref (GST_OBJECT (pipeline));
+}
+
+void pipeline_run(){
+	g_print ("Starting pipeline.\n");
+	gst_element_set_state (pipeline, GST_STATE_PLAYING);
+}
+
+void pipeline_pause(){
+	g_print ("Pausing pipeline.\n");
+	gst_element_set_state (pipeline, GST_STATE_PAUSED);
+}
+
+void pipeline_stop(){
+	g_print ("Stopping pipeline.\n");
+	gst_element_set_state (pipeline, GST_STATE_NULL);
 }
 
