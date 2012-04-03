@@ -39,7 +39,7 @@ GMainLoop  *loop;
 
 GstElement *pipeline;
 GstElement *rtpBin, *udpSource;
-GstElement *liveadder;
+GstElement *liveAdder, *testAudioSink;
 
 int main(int argc, char *argv[]) {
     gst_init(NULL, NULL);
@@ -135,7 +135,7 @@ void linkPads_src2Bin(){
 	g_print ("\tLinking UDP-source and RTP-bin.\n");
 
 	GstPad* srcpad = gst_element_get_static_pad (udpSource, "src");
-	GstPad* sinkpad = gst_element_get_request_pad (rtpBin, "recv_rtp_sink_0");
+	GstPad* sinkpad = gst_element_get_request_pad (rtpBin, "recv_rtp_sink_%d");
 
 	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
 
@@ -151,12 +151,36 @@ void linkRtpBin_PAD_ADDED_callback(){
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
 	g_print ("New payload on pad: %s\n", GST_PAD_NAME (new_pad));
 
+	gst_element_set_state(pipeline, GST_STATE_PAUSED);
+
 	GstElement* rtpDecoder = createRtpDecoder();
 
 	g_print ("\tLinking pad and RTP-decoder.\n");
 	GstPad* sinkpad = gst_element_get_static_pad (rtpDecoder, "sink");
 	g_assert (gst_pad_link (new_pad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (sinkpad);
+
+	if (!liveAdder){
+		liveAdder = gst_element_factory_make ("liveadder", "adder");
+		g_assert (liveAdder);
+
+		testAudioSink = gst_element_factory_make ("autoaudiosink", "audio-output");
+		g_assert (testAudioSink);
+
+		gst_bin_add_many (GST_BIN (pipeline), liveAdder, testAudioSink, NULL);
+		g_assert (gst_element_link (liveAdder, testAudioSink));
+	}
+
+	g_print ("\tRTP-decoder and live adder.\n");
+			sinkpad = gst_element_get_request_pad (liveAdder, "sink%d");
+	GstPad* srcpad  = gst_element_get_static_pad (rtpDecoder, "src");
+
+	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
+
+	gst_object_unref (srcpad);
+	gst_object_unref (sinkpad);
+
+	gst_element_set_state (pipeline, GST_STATE_PLAYING);
 }
 
 
@@ -170,7 +194,7 @@ GstElement* createRtpDecoder(){
 	g_assert(bin);
 
 	g_print ("\t\tCreating queue.\n");
-	queue   = gst_element_factory_make ("queue",        NULL);
+	queue   = gst_element_factory_make ("queue", NULL);
 	g_assert(queue);
 
 	g_print ("\t\tCreating depay.\n");
@@ -178,7 +202,7 @@ GstElement* createRtpDecoder(){
 	g_assert(depay);
 
 	g_print ("\t\tCreating G.726 decoder.\n");
-	decoder = gst_element_factory_make ("ffdec_g726",   NULL);
+	decoder = gst_element_factory_make ("ffdec_g726", NULL);
 	g_assert(decoder);
 
 	gst_bin_add_many (GST_BIN (bin), queue, depay, decoder, NULL);
