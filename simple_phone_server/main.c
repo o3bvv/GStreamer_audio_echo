@@ -33,7 +33,7 @@ void createRtpDecoderSinkPad(GstElement* bin, GstElement* padOwner);
 void createRtpDecoderSrcPad(GstElement* bin, GstElement* padOwner);
 void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin);
 
-void checkMultiplexingPart();
+void createMultiplexingPartOnDemand();
 gboolean isLiveAdderNotCreated();
 void createMultiplexingPart();
 void createLiveAdder();
@@ -196,7 +196,7 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 	g_assert (gst_pad_link (new_pad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (sinkpad);
 
-	checkMultiplexingPart();
+	createMultiplexingPartOnDemand();
 
 	g_print ("\tRTP-decoder and multiplexing part.\n");
 			sinkpad = gst_element_get_request_pad (liveAdder, "sink%d");
@@ -286,7 +286,7 @@ void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin){
 	dynamicConnectionList_addFirst(&connectionList, dCon);
 }
 
-void checkMultiplexingPart(){
+void createMultiplexingPartOnDemand(){
 	if (isLiveAdderNotCreated()){
 		createMultiplexingPart();
 	}
@@ -328,6 +328,8 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 	GstElement* decoderBin = dCon->decoderBin;
 	free(dCon);
 
+	pipeline_pause();
+
 	g_print ("\tUnlinking RTP-bin and multiplexing part.\n");
 	
 	GstPad* srcpad = gst_element_get_static_pad (decoderBin, "src");
@@ -341,6 +343,8 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 	g_print ("\tStopping RTP-bin.\n");
 	gst_element_set_state (decoderBin, GST_STATE_NULL);
 	
+	pipeline_run();
+
 	g_print ("\tPad removed.\n");
 }
 
