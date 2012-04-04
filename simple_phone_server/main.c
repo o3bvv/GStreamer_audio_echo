@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <gst/gst.h>
 
+#include "dynamicConnection.h"
+
 void getParametersOrExit(int argc, char *argv[]);
 void getParameters(int argc, char *argv[]);
 void printParameters();
@@ -14,9 +16,13 @@ void addPrimaryElements();
 
 void linkPrimaryElements();
 void linkPads_src2Bin();
+void linkRtpBinCallbacks();
 void linkRtpBin_PAD_ADDED_callback();
+void linkRtpBin_PAD_REMOVED_callback();
 
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data);
+static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_data);
+
 GstElement* createRtpDecoder();
 GstElement* createRtpDecoderBin();
 GstElement* createRtpSrcQueue();
@@ -25,6 +31,7 @@ GstElement* createDecoder();
 void createRtpDecoderPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner);
 void createRtpDecoderSinkPad(GstElement* bin, GstElement* padOwner);
 void createRtpDecoderSrcPad(GstElement* bin, GstElement* padOwner);
+void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin);
 
 void checkMultiplexingPart();
 gboolean isLiveAdderNotCreated();
@@ -57,6 +64,8 @@ GMainLoop  *loop;
 GstElement *pipeline;
 GstElement *rtpBin, *udpSource;
 GstElement *liveAdder, *testAudioSink;
+
+DynamicConnectionList connectionList;
 
 int main(int argc, char *argv[]) {
     gst_init(NULL, NULL);
@@ -145,7 +154,7 @@ void addPrimaryElements(){
 void linkPrimaryElements(){
 	g_print ("Linking primary elements.\n");
 	linkPads_src2Bin();
-	linkRtpBin_PAD_ADDED_callback();
+	linkRtpBinCallbacks();
 }
 
 void linkPads_src2Bin(){
@@ -160,9 +169,19 @@ void linkPads_src2Bin(){
 	gst_object_unref (sinkpad);
 }
 
+void linkRtpBinCallbacks(){
+	linkRtpBin_PAD_ADDED_callback();
+	linkRtpBin_PAD_REMOVED_callback();
+}
+
 void linkRtpBin_PAD_ADDED_callback(){
 	g_print ("\tAdding RTP-bin \"pad-added\" callback.\n");
 	g_signal_connect (rtpBin, "pad-added", G_CALLBACK (rtpBinPadAdded), NULL);
+}
+
+void linkRtpBin_PAD_REMOVED_callback(){
+	g_print ("\tAdding RTP-bin \"pad-removed\" callback.\n");
+	g_signal_connect (rtpBin, "pad-removed", G_CALLBACK (rtpBinPadRemoved), NULL);
 }
 
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
@@ -187,8 +206,9 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 	gst_object_unref (sinkpad);
 
 	pipeline_run();
-}
 
+	registerConnection(new_pad, rtpDecoder);
+}
 
 GstElement* createRtpDecoder(){
 	// PIPELINE MUST BE PAUSED OR STOPPED
@@ -259,6 +279,13 @@ void createRtpDecoderSrcPad(GstElement* bin, GstElement* padOwner){
 	gst_object_unref (GST_OBJECT (pad));
 }
 
+void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin){
+	DynamicConnection* dCon = (DynamicConnection*) malloc( sizeof(DynamicConnection));
+	dCon->rptBinPad = rtpBinPad;
+	dCon->decoderBin = decoderBin;
+	dynamicConnectionList_addFirst(&connectionList, dCon);
+}
+
 void checkMultiplexingPart(){
 	if (isLiveAdderNotCreated()){
 		createMultiplexingPart();
@@ -289,6 +316,32 @@ void createTestAudioSink(){
 	g_print ("\t\tCreating audio sink.\n");
 	testAudioSink = gst_element_factory_make ("autoaudiosink", "audio-output");
 	g_assert (testAudioSink);
+}
+
+static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_data){
+
+	g_print ("Removing pad: %s\n", GST_PAD_NAME (pad));
+
+	DynamicConnection* dCon = dynamicConnectionList_removeByRtpBinPad(&connectionList, pad);	
+	g_assert (dCon);
+
+	GstElement* decoderBin = dCon->decoderBin;
+	free(dCon);
+
+	g_print ("\tUnlinking RTP-bin and multiplexing part.\n");
+	
+	GstPad* srcpad = gst_element_get_static_pad (decoderBin, "src");
+	GstPad* sinkpad = gst_pad_get_peer(srcpad);
+
+	g_assert (gst_pad_unlink (srcpad, sinkpad));
+	
+	gst_object_unref (sinkpad);
+	gst_object_unref (srcpad);
+
+	g_print ("\tStopping RTP-bin.\n");
+	gst_element_set_state (decoderBin, GST_STATE_NULL);
+	
+	g_print ("\tPad removed.\n");
 }
 
 void registerBusCall(){
