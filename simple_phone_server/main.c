@@ -1,6 +1,5 @@
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
 #include <gst/gst.h>
 
 #include "dynamicConnection.h"
@@ -52,9 +51,6 @@ GstElement* createLiveAdder();
 GstElement* createEncoder();
 GstElement* createRtpPay();
 GstElement* createOutputTee();
-void createMixingBinPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner);
-void createMixingBinSinkPad(GstElement* bin, GstElement* padOwner);
-void createMixingBinSrcPad(GstElement* bin, GstElement* padOwner);
 
 void deleteMixingBinOnDemand();
 void deleteMixingBin();
@@ -83,7 +79,7 @@ GMainLoop  *loop;
 
 GstElement *pipeline;
 GstElement *rtpBin, *udpSource;
-GstElement *mixingBin;
+GstElement *adder, *encoder, *pay, *tee;
 
 DynamicConnectionList connectionList;
 
@@ -218,25 +214,22 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 
 	g_print ("\tLinking pad and RTP-decoder.\n");
 	GstPad* sinkpad = gst_element_get_static_pad (rtpDecoder, "sink");
+	g_assert (sinkpad);
 	g_assert (gst_pad_link (new_pad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (sinkpad);
 
 	createMixingBinOnDemand();
 
-	// TODO ::
-
 	g_print ("\tLinking RTP-decoder and mixing bin.\n");
-			sinkpad = gst_element_get_request_pad (mixingBin, "sink%d");
+	sinkpad = gst_element_get_request_pad (adder, "sink%d");
 	GstPad* srcpad  = gst_element_get_static_pad (rtpDecoder, "src");
 	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (srcpad);
 	gst_object_unref (sinkpad);
 
-	// TODO ::
-
 	g_print ("\tLinking mixing bin and RTP-output.\n");
 	sinkpad = gst_element_get_static_pad (rtpOutput, "sink");
-	srcpad  = gst_element_get_static_pad (mixingBin, "src");
+	srcpad  = gst_element_get_request_pad (tee, "src%d");
 	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (srcpad);
 	gst_object_unref (sinkpad);
@@ -323,24 +316,27 @@ gchar* getOneNewHost (){
 	g_object_get (session, "sources", &arr, NULL);
 
 	gchar* host = 0;
-	gchar* currentHost;
+	gchar** tokens;
+	gchar* socketDescr;
 
 	for (i = 0; i < arr->n_values; i++) {
 		val = g_value_array_get_nth (arr, i);
 		GObject *source = (GObject *)g_value_get_object (val);      
-		currentHost = getPeerHostOrZero(source);
+		socketDescr = getPeerHostOrZero(source);
 
-		if (!currentHost){
+		if (!socketDescr){
 			continue;
 		}
 
-		if (dynamicConnectionList_isHostNotRegistered(&connectionList, currentHost)){
-			host = strtok(currentHost,":");
+		if (dynamicConnectionList_isHostNotRegistered(&connectionList, socketDescr)){
+			tokens = g_strsplit(socketDescr,":",0);
+			int len = g_utf8_strlen(tokens[0], -1)-1;
+			host = malloc(len*sizeof(gchar));
+			g_utf8_strncpy(host, tokens[0]+1, len);
 			break;
 		}
 	}
 
-	g_free(currentHost);
 	g_value_array_free (arr);
 	g_object_unref (session);
 
@@ -430,24 +426,19 @@ void createMixingBinOnDemand(){
 }
 
 gboolean isMixingBinNotCreated(){
-	return mixingBin == 0;
+	return adder == 0;
 }
 
 void createMixingBin(){
 	g_print ("\tCreating mixing bin.\n");
 
-	GstElement* bin		= createMixingBinElement();
-	GstElement* adder   = createLiveAdder();
-	GstElement* encoder = createEncoder();
-	GstElement* pay 	= createRtpPay();
-	GstElement* tee 	= createOutputTee();
-
-	gst_bin_add_many (GST_BIN (bin), adder, encoder, pay, tee, NULL);
-	
-	createMixingBinPads(bin, adder, tee);	
+	adder   = createLiveAdder();
+	encoder = createEncoder();
+	pay 	= createRtpPay();
+	tee 	= createOutputTee();
 
 	g_print ("\t\tAdding to pipeline.\n");
-	gst_bin_add (GST_BIN (pipeline), bin);
+	gst_bin_add_many (GST_BIN (pipeline), adder, encoder, pay, tee, NULL);
 	g_assert (gst_element_link_many (adder, encoder, pay, tee, NULL));	
 }
 
@@ -488,32 +479,6 @@ GstElement* createOutputTee(){
 	return elem;
 }
 
-void createMixingBinPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner){
-	g_print ("\t\tAdding ghost pads.\n");
-	createRtpDecoderSinkPad(bin, sinkPadOwner);
-	createRtpDecoderSrcPad(bin, srcPadOwner);
-}
-
-void createMixingBinSinkPad(GstElement* bin, GstElement* padOwner){
-
-	// TODO::
-
-	g_print ("\t\t\tAdding sink pad.\n");
-	GstPad* pad = gst_element_get_static_pad (padOwner, "sink");
-	gst_element_add_pad (bin, gst_ghost_pad_new ("sink", pad));
-	gst_object_unref (GST_OBJECT (pad));
-}
-
-void createMixingBinSrcPad(GstElement* bin, GstElement* padOwner){
-
-	// TODO::
-
-	g_print ("\t\t\tAdding source pad.\n");
-	GstPad* pad = gst_element_get_static_pad (padOwner, "src");
-	gst_element_add_pad (bin, gst_ghost_pad_new ("src", pad));
-	gst_object_unref (GST_OBJECT (pad));
-}
-
 static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_data){
 	g_print ("Removing pad: %s\n", GST_PAD_NAME (pad));
 
@@ -534,8 +499,8 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 	gst_object_unref (srcpad);
 
 	g_print ("\tUnlinking RTP-output and mixing bin.\n");
-	GstPad* sinkpad = gst_element_get_static_pad (outputBin, "sink");
-	GstPad* srcpad  = gst_pad_get_peer(srcpad);
+	sinkpad = gst_element_get_static_pad (outputBin, "sink");
+	srcpad  = gst_pad_get_peer(sinkpad);
 	g_assert (gst_pad_unlink (srcpad, sinkpad));
 	gst_object_unref (sinkpad);
 	gst_object_unref (srcpad);
@@ -563,10 +528,19 @@ void deleteMixingBinOnDemand(){
 void deleteMixingBin(){
 	g_print ("\tDeleting mixing bin.\n");
 
-	gst_element_set_state (mixingBin, GST_STATE_NULL);
-	gst_bin_remove (GST_BIN (pipeline), mixingBin);
+	gst_element_set_state (adder, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), adder);
 
-	mixingBin = 0;
+	gst_element_set_state (encoder, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), encoder);
+
+	gst_element_set_state (pay, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), pay);
+
+	gst_element_set_state (tee, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), tee);
+
+	adder = 0;
 }
 
 void registerBusCall(){
