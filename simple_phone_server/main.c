@@ -24,18 +24,25 @@ void linkRtpBin_PAD_REMOVED_callback();
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data);
 static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_data);
 
-GstElement* createRtpDecoder();
 GstElement* createRtpDecoderBin();
+GstElement* createRtpDecoderBinElement();
 GstElement* createRtpSrcQueue();
 GstElement* createRtpDepay();
 GstElement* createDecoder();
 void createRtpDecoderPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner);
 void createRtpDecoderSinkPad(GstElement* bin, GstElement* padOwner);
 void createRtpDecoderSrcPad(GstElement* bin, GstElement* padOwner);
-void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin, gchar* host);
+
+GstElement* createRtpOutputBin(gchar* host);
+GstElement* createRtpOutputBinElement();
+GstElement* createRtpSinkQueue();
+GstElement* createUdpSink(gchar* host);
+void createRtpOutputSinkPad(GstElement* bin, GstElement* padOwner);
 
 gchar* getOneNewHost ();
 gchar* getPeerHostOrZero (GObject* source);
+
+void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin, GstElement* outputBin, gchar* host);
 
 void createMixingBinOnDemand();
 gboolean isMixingBinNotCreated();
@@ -202,7 +209,12 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 
 	pipeline_pause();
 
-	GstElement* rtpDecoder = createRtpDecoder();
+	GstElement* rtpDecoder = createRtpDecoderBin();
+
+	gchar* host = getOneNewHost();
+	g_print ("\tSelected peer's host: %s.\n", host);
+
+	GstElement* rtpOutput = createRtpOutputBin(host);
 
 	g_print ("\tLinking pad and RTP-decoder.\n");
 	GstPad* sinkpad = gst_element_get_static_pad (rtpDecoder, "sink");
@@ -211,6 +223,8 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 
 	createMixingBinOnDemand();
 
+	// TODO ::
+
 	g_print ("\tLinking RTP-decoder and mixing bin.\n");
 			sinkpad = gst_element_get_request_pad (mixingBin, "sink%d");
 	GstPad* srcpad  = gst_element_get_static_pad (rtpDecoder, "src");
@@ -218,20 +232,24 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 	gst_object_unref (srcpad);
 	gst_object_unref (sinkpad);
 
+	// TODO ::
+
+	g_print ("\tLinking mixing bin and RTP-output.\n");
+	sinkpad = gst_element_get_static_pad (rtpOutput, "sink");
+	srcpad  = gst_element_get_static_pad (mixingBin, "src");
+	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
+	gst_object_unref (srcpad);
+	gst_object_unref (sinkpad);
+
 	pipeline_run();
 
-	gchar* host = getOneNewHost();
-	g_print ("\tSelected peer's host: %s.\n", host);
-
-	registerConnection(new_pad, rtpDecoder, host);
+	registerConnection(new_pad, rtpDecoder, rtpOutput, host);
 }
 
-GstElement* createRtpDecoder(){
-	// PIPELINE MUST BE PAUSED OR STOPPED
-	
+GstElement* createRtpDecoderBin(){
 	g_print ("\tCreating RTP-decoder.\n");
 
-	GstElement* bin 	= createRtpDecoderBin();
+	GstElement* bin 	= createRtpDecoderBinElement();
 	GstElement* queue   = createRtpSrcQueue();
 	GstElement* depay   = createRtpDepay();
 	GstElement* decoder = createDecoder();
@@ -247,7 +265,7 @@ GstElement* createRtpDecoder(){
 	return bin;
 }
 
-GstElement* createRtpDecoderBin(){
+GstElement* createRtpDecoderBinElement(){
 	g_print ("\t\tCreating bin.\n");
 	GstElement* elem = gst_bin_new (NULL);
 	g_assert(elem);
@@ -346,10 +364,61 @@ gchar* getPeerHostOrZero (GObject* source){
 	return host;
 }
 
-void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin, gchar* host){
+GstElement* createRtpOutputBin(gchar* host){
+	g_print ("\tCreating RTP-output.\n");
+
+	GstElement* bin   = createRtpOutputBinElement();
+	GstElement* queue = createRtpSinkQueue();
+	GstElement* sink  = createUdpSink(host);
+
+	gst_bin_add_many (GST_BIN (bin), queue, sink, NULL);
+	
+	createRtpOutputSinkPad(bin, queue);	
+
+	g_print ("\t\tAdding to pipeline.\n");
+	gst_bin_add (GST_BIN (pipeline), bin);
+	g_assert (gst_element_link_many (queue, sink, NULL));
+
+	return bin;
+}
+
+GstElement* createRtpOutputBinElement(){
+	g_print ("\t\tCreating bin.\n");
+	GstElement* elem = gst_bin_new (NULL);
+	g_assert(elem);
+	return elem;
+}
+
+GstElement* createRtpSinkQueue(){
+	g_print ("\t\tCreating RTP sink queue.\n");
+	GstElement* elem = gst_element_factory_make ("queue", NULL);
+	g_assert(elem);
+	return elem;
+}
+
+GstElement* createUdpSink(gchar* host){
+	g_print ("\t\tCreating UDP sink.\n");
+
+	GstElement* elem = gst_element_factory_make ("udpsink", "rtp-output");
+	g_assert(elem);
+	g_object_set (G_OBJECT (elem), "host", host, NULL);
+	g_object_set (G_OBJECT (elem), "port", DEFAULT_UDP_PORT, NULL);
+	g_object_set (G_OBJECT (elem), "async", FALSE, "sync", FALSE, NULL);
+	return elem;
+}
+
+void createRtpOutputSinkPad(GstElement* bin, GstElement* padOwner){
+	g_print ("\t\t\tAdding sink pad.\n");
+	GstPad* pad = gst_element_get_static_pad (padOwner, "sink");
+	gst_element_add_pad (bin, gst_ghost_pad_new ("sink", pad));
+	gst_object_unref (GST_OBJECT (pad));
+}
+
+void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin, GstElement* outputBin, gchar* host){
 	DynamicConnection* dCon = (DynamicConnection*) malloc( sizeof(DynamicConnection));
-	dCon->rptBinPad = rtpBinPad;
+	dCon->rptBinPad  = rtpBinPad;
 	dCon->decoderBin = decoderBin;
+	dCon->outputBin  = outputBin;
 	dCon->host = host;
 	dynamicConnectionList_addFirst(&connectionList, dCon);
 }
@@ -446,30 +515,38 @@ void createMixingBinSrcPad(GstElement* bin, GstElement* padOwner){
 }
 
 static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_data){
-
 	g_print ("Removing pad: %s\n", GST_PAD_NAME (pad));
 
 	DynamicConnection* dCon = dynamicConnectionList_removeByRtpBinPad(&connectionList, pad);	
 	g_assert (dCon);
 
 	GstElement* decoderBin = dCon->decoderBin;
+	GstElement* outputBin  = dCon->outputBin;
 	free(dCon);
 
 	pipeline_pause();
 
 	g_print ("\tUnlinking RTP-decoder and mixing bin.\n");
-	
-	GstPad* srcpad = gst_element_get_static_pad (decoderBin, "src");
+	GstPad* srcpad  = gst_element_get_static_pad (decoderBin, "src");
 	GstPad* sinkpad = gst_pad_get_peer(srcpad);
-
 	g_assert (gst_pad_unlink (srcpad, sinkpad));
+	gst_object_unref (sinkpad);
+	gst_object_unref (srcpad);
 
+	g_print ("\tUnlinking RTP-output and mixing bin.\n");
+	GstPad* sinkpad = gst_element_get_static_pad (outputBin, "sink");
+	GstPad* srcpad  = gst_pad_get_peer(srcpad);
+	g_assert (gst_pad_unlink (srcpad, sinkpad));
 	gst_object_unref (sinkpad);
 	gst_object_unref (srcpad);
 
 	g_print ("\tStopping RTP-decoder.\n");
 	gst_element_set_state (decoderBin, GST_STATE_NULL);
 	gst_bin_remove (GST_BIN (pipeline), decoderBin);
+
+	g_print ("\tStopping RTP-output.\n");
+	gst_element_set_state (outputBin, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), outputBin);
 
 	deleteMixingBinOnDemand();
 

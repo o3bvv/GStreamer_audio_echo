@@ -8,6 +8,7 @@
 typedef struct {
 	GstPad* rptBinPad;
 	GstElement* decoderBin;
+	GstElement* outputBin;
 	gchar* host;
 } DynamicConnection;
 
