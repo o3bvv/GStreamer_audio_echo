@@ -39,6 +39,9 @@ void createMultiplexingPart();
 void createLiveAdder();
 void createTestAudioSink();
 
+void deleteMultiplexingPartOnDemand();
+void deleteMultiplexingPart();
+
 void registerBusCall();
 static gboolean busCall(GstBus *bus, GstMessage *msg, gpointer data);
 
@@ -198,7 +201,7 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 
 	createMultiplexingPartOnDemand();
 
-	g_print ("\tRTP-decoder and multiplexing part.\n");
+	g_print ("\tLinking RTP-decoder and multiplexing part.\n");
 			sinkpad = gst_element_get_request_pad (liveAdder, "sink%d");
 	GstPad* srcpad  = gst_element_get_static_pad (rtpDecoder, "src");
 	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
@@ -336,16 +339,37 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 	GstPad* sinkpad = gst_pad_get_peer(srcpad);
 
 	g_assert (gst_pad_unlink (srcpad, sinkpad));
-	
+
 	gst_object_unref (sinkpad);
 	gst_object_unref (srcpad);
 
 	g_print ("\tStopping RTP-bin.\n");
 	gst_element_set_state (decoderBin, GST_STATE_NULL);
-	
+	gst_bin_remove (GST_BIN (pipeline), decoderBin);
+
+	deleteMultiplexingPartOnDemand();
+
 	pipeline_run();
 
 	g_print ("\tPad removed.\n");
+}
+
+void deleteMultiplexingPartOnDemand(){
+	if (dynamicConnectionList_isEmpty(&connectionList)){
+		deleteMultiplexingPart();
+	}
+}
+
+void deleteMultiplexingPart(){
+	g_print ("\tStopping multiplexing part.\n");
+
+	gst_element_set_state (liveAdder, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), liveAdder);
+
+	gst_element_set_state (testAudioSink, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), testAudioSink);
+
+	liveAdder = 0;
 }
 
 void registerBusCall(){

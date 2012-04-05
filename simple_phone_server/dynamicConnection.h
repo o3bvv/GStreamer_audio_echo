@@ -69,4 +69,8 @@ DynamicConnection* dynamicConnectionList_removeByRtpBinPad(DynamicConnectionList
 	return 0;
 }
 
+gboolean dynamicConnectionList_isEmpty(DynamicConnectionList* list){
+	return list->size == 0;
+}
+
 #endif
