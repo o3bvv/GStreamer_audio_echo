@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <gst/gst.h>
 
 #include "dynamicConnection.h"
@@ -31,16 +32,25 @@ GstElement* createDecoder();
 void createRtpDecoderPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner);
 void createRtpDecoderSinkPad(GstElement* bin, GstElement* padOwner);
 void createRtpDecoderSrcPad(GstElement* bin, GstElement* padOwner);
-void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin);
+void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin, gchar* host);
 
-void createMultiplexingPartOnDemand();
-gboolean isLiveAdderNotCreated();
-void createMultiplexingPart();
-void createLiveAdder();
-void createTestAudioSink();
+gchar* getOneNewHost ();
+gchar* getPeerHostOrZero (GObject* source);
 
-void deleteMultiplexingPartOnDemand();
-void deleteMultiplexingPart();
+void createMixingBinOnDemand();
+gboolean isMixingBinNotCreated();
+void createMixingBin();
+GstElement* createMixingBinElement();
+GstElement* createLiveAdder();
+GstElement* createEncoder();
+GstElement* createRtpPay();
+GstElement* createOutputTee();
+void createMixingBinPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner);
+void createMixingBinSinkPad(GstElement* bin, GstElement* padOwner);
+void createMixingBinSrcPad(GstElement* bin, GstElement* padOwner);
+
+void deleteMixingBinOnDemand();
+void deleteMixingBin();
 
 void registerBusCall();
 static gboolean busCall(GstBus *bus, GstMessage *msg, gpointer data);
@@ -66,7 +76,7 @@ GMainLoop  *loop;
 
 GstElement *pipeline;
 GstElement *rtpBin, *udpSource;
-GstElement *liveAdder, *testAudioSink;
+GstElement *mixingBin;
 
 DynamicConnectionList connectionList;
 
@@ -187,43 +197,6 @@ void linkRtpBin_PAD_REMOVED_callback(){
 	g_signal_connect (rtpBin, "pad-removed", G_CALLBACK (rtpBinPadRemoved), NULL);
 }
 
-
-void print_single_peer (GObject* source){
-	GstStructure* stats;
-
-	g_object_get (source, "stats", &stats, NULL);
-
-	const GValue* val = gst_structure_get_value(stats, "rtp-from");
-
-	if (val){
-		g_print ("rtp-peer: %s\n", g_strdup_value_contents (val));
-	}	
-
-	gst_structure_free (stats);
-}
-
-void  print_peers (GstElement * rtpbin){
-	GObject *session;
-	GValueArray *arr;
-	GValue *val;
-	guint i;
-
-	g_signal_emit_by_name (rtpbin, "get-internal-session", 0, &session);
-	g_object_get (session, "sources", &arr, NULL);
-
-	for (i = 0; i < arr->n_values; i++) {
-		GObject *source;
-
-		val = g_value_array_get_nth (arr, i);
-		source = (GObject *)g_value_get_object (val);
-      
-		print_single_peer(source);
-	}
-	
-	g_value_array_free (arr);
-	g_object_unref (session);
-}
-
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
 	g_print ("New payload on pad: %s\n", GST_PAD_NAME (new_pad));
 
@@ -236,10 +209,10 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 	g_assert (gst_pad_link (new_pad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (sinkpad);
 
-	createMultiplexingPartOnDemand();
+	createMixingBinOnDemand();
 
-	g_print ("\tLinking RTP-decoder and multiplexing part.\n");
-			sinkpad = gst_element_get_request_pad (liveAdder, "sink%d");
+	g_print ("\tLinking RTP-decoder and mixing bin.\n");
+			sinkpad = gst_element_get_request_pad (mixingBin, "sink%d");
 	GstPad* srcpad  = gst_element_get_static_pad (rtpDecoder, "src");
 	g_assert (gst_pad_link (srcpad, sinkpad) == GST_PAD_LINK_OK);
 	gst_object_unref (srcpad);
@@ -247,9 +220,10 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 
 	pipeline_run();
 
-	registerConnection(new_pad, rtpDecoder);
+	gchar* host = getOneNewHost();
+	g_print ("\tSelected peer's host: %s.\n", host);
 
-	print_peers(rtpBin);
+	registerConnection(new_pad, rtpDecoder, host);
 }
 
 GstElement* createRtpDecoder(){
@@ -321,43 +295,154 @@ void createRtpDecoderSrcPad(GstElement* bin, GstElement* padOwner){
 	gst_object_unref (GST_OBJECT (pad));
 }
 
-void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin){
+gchar* getOneNewHost (){
+	GObject *session;
+	GValueArray *arr;
+	GValue *val;
+	guint i;
+
+	g_signal_emit_by_name (rtpBin, "get-internal-session", 0, &session);
+	g_object_get (session, "sources", &arr, NULL);
+
+	gchar* host = 0;
+	gchar* currentHost;
+
+	for (i = 0; i < arr->n_values; i++) {
+		val = g_value_array_get_nth (arr, i);
+		GObject *source = (GObject *)g_value_get_object (val);      
+		currentHost = getPeerHostOrZero(source);
+
+		if (!currentHost){
+			continue;
+		}
+
+		if (dynamicConnectionList_isHostNotRegistered(&connectionList, currentHost)){
+			host = strtok(currentHost,":");
+			break;
+		}
+	}
+
+	g_free(currentHost);
+	g_value_array_free (arr);
+	g_object_unref (session);
+
+	return host;
+}
+
+gchar* getPeerHostOrZero (GObject* source){
+	GstStructure* stats;
+	g_object_get (source, "stats", &stats, NULL);
+
+	gchar* host = 0;
+
+	const GValue* val = gst_structure_get_value(stats, "rtp-from");
+	if (!val){
+		return host;
+	}
+
+	host = g_strdup_value_contents (val);
+	gst_structure_free (stats);
+
+	return host;
+}
+
+void registerConnection(GstPad* rtpBinPad, GstElement* decoderBin, gchar* host){
 	DynamicConnection* dCon = (DynamicConnection*) malloc( sizeof(DynamicConnection));
 	dCon->rptBinPad = rtpBinPad;
 	dCon->decoderBin = decoderBin;
+	dCon->host = host;
 	dynamicConnectionList_addFirst(&connectionList, dCon);
 }
 
-void createMultiplexingPartOnDemand(){
-	if (isLiveAdderNotCreated()){
-		createMultiplexingPart();
+void createMixingBinOnDemand(){
+	if (isMixingBinNotCreated()){
+		createMixingBin();
 	}
 }
 
-gboolean isLiveAdderNotCreated(){
-	return liveAdder == 0;
+gboolean isMixingBinNotCreated(){
+	return mixingBin == 0;
 }
 
-void createMultiplexingPart(){
-	g_print ("\tCreating multiplexing part.\n");
+void createMixingBin(){
+	g_print ("\tCreating mixing bin.\n");
 
-	createLiveAdder();
-	createTestAudioSink();
+	GstElement* bin		= createMixingBinElement();
+	GstElement* adder   = createLiveAdder();
+	GstElement* encoder = createEncoder();
+	GstElement* pay 	= createRtpPay();
+	GstElement* tee 	= createOutputTee();
 
-	gst_bin_add_many (GST_BIN (pipeline), liveAdder, testAudioSink, NULL);
-	g_assert (gst_element_link (liveAdder, testAudioSink));
+	gst_bin_add_many (GST_BIN (bin), adder, encoder, pay, tee, NULL);
+	
+	createMixingBinPads(bin, adder, tee);	
+
+	g_print ("\t\tAdding to pipeline.\n");
+	gst_bin_add (GST_BIN (pipeline), bin);
+	g_assert (gst_element_link_many (adder, encoder, pay, tee, NULL));	
 }
 
-void createLiveAdder(){
+GstElement* createMixingBinElement(){
+	g_print ("\t\tCreating bin element.\n");
+	GstElement* elem = gst_bin_new (NULL);
+	g_assert(elem);
+	return elem;
+}
+
+GstElement* createLiveAdder(){
 	g_print ("\t\tCreating live adder.\n");
-	liveAdder = gst_element_factory_make ("liveadder", "adder");
-	g_assert (liveAdder);
+	GstElement* elem = gst_element_factory_make ("liveadder", "adder");
+	g_assert (elem);
+	return elem;
 }
 
-void createTestAudioSink(){
-	g_print ("\t\tCreating audio sink.\n");
-	testAudioSink = gst_element_factory_make ("autoaudiosink", "audio-output");
-	g_assert (testAudioSink);
+GstElement* createEncoder(){
+	g_print ("\t\tCreating encoder.\n");
+
+	GstElement* elem = gst_element_factory_make ("ffenc_g726", "G.726-coder");
+	g_object_set (G_OBJECT (elem), "bitrate", 32000, NULL);
+	g_assert (elem);
+	return elem;
+}
+
+GstElement* createRtpPay(){
+	g_print ("\t\tCreating RTP-pay.\n");
+	GstElement* elem = gst_element_factory_make ("rtpg726pay", "rtp-pay");
+	g_assert (elem);
+	return elem;
+}
+
+GstElement* createOutputTee(){
+	g_print ("\t\tCreating output tee.\n");
+	GstElement* elem = gst_element_factory_make ("tee", "output-tee");
+	g_assert (elem);
+	return elem;
+}
+
+void createMixingBinPads(GstElement* bin, GstElement* sinkPadOwner, GstElement* srcPadOwner){
+	g_print ("\t\tAdding ghost pads.\n");
+	createRtpDecoderSinkPad(bin, sinkPadOwner);
+	createRtpDecoderSrcPad(bin, srcPadOwner);
+}
+
+void createMixingBinSinkPad(GstElement* bin, GstElement* padOwner){
+
+	// TODO::
+
+	g_print ("\t\t\tAdding sink pad.\n");
+	GstPad* pad = gst_element_get_static_pad (padOwner, "sink");
+	gst_element_add_pad (bin, gst_ghost_pad_new ("sink", pad));
+	gst_object_unref (GST_OBJECT (pad));
+}
+
+void createMixingBinSrcPad(GstElement* bin, GstElement* padOwner){
+
+	// TODO::
+
+	g_print ("\t\t\tAdding source pad.\n");
+	GstPad* pad = gst_element_get_static_pad (padOwner, "src");
+	gst_element_add_pad (bin, gst_ghost_pad_new ("src", pad));
+	gst_object_unref (GST_OBJECT (pad));
 }
 
 static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_data){
@@ -372,7 +457,7 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 
 	pipeline_pause();
 
-	g_print ("\tUnlinking RTP-bin and multiplexing part.\n");
+	g_print ("\tUnlinking RTP-decoder and mixing bin.\n");
 	
 	GstPad* srcpad = gst_element_get_static_pad (decoderBin, "src");
 	GstPad* sinkpad = gst_pad_get_peer(srcpad);
@@ -382,33 +467,29 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 	gst_object_unref (sinkpad);
 	gst_object_unref (srcpad);
 
-	g_print ("\tStopping RTP-bin.\n");
+	g_print ("\tStopping RTP-decoder.\n");
 	gst_element_set_state (decoderBin, GST_STATE_NULL);
 	gst_bin_remove (GST_BIN (pipeline), decoderBin);
 
-	deleteMultiplexingPartOnDemand();
-
-	pipeline_run();
+	deleteMixingBinOnDemand();
 
 	g_print ("\tPad removed.\n");
+	pipeline_run();
 }
 
-void deleteMultiplexingPartOnDemand(){
+void deleteMixingBinOnDemand(){
 	if (dynamicConnectionList_isEmpty(&connectionList)){
-		deleteMultiplexingPart();
+		deleteMixingBin();
 	}
 }
 
-void deleteMultiplexingPart(){
-	g_print ("\tStopping multiplexing part.\n");
+void deleteMixingBin(){
+	g_print ("\tDeleting mixing bin.\n");
 
-	gst_element_set_state (liveAdder, GST_STATE_NULL);
-	gst_bin_remove (GST_BIN (pipeline), liveAdder);
+	gst_element_set_state (mixingBin, GST_STATE_NULL);
+	gst_bin_remove (GST_BIN (pipeline), mixingBin);
 
-	gst_element_set_state (testAudioSink, GST_STATE_NULL);
-	gst_bin_remove (GST_BIN (pipeline), testAudioSink);
-
-	liveAdder = 0;
+	mixingBin = 0;
 }
 
 void registerBusCall(){

@@ -2,11 +2,13 @@
 #define DYNAMIC_CONNECTION_H
 
 #include <gst/gst.h>
+#include <string.h> 
 #include <stdlib.h> 
 
 typedef struct {
 	GstPad* rptBinPad;
 	GstElement* decoderBin;
+	gchar* host;
 } DynamicConnection;
 
 struct DCLE {
@@ -71,6 +73,20 @@ DynamicConnection* dynamicConnectionList_removeByRtpBinPad(DynamicConnectionList
 
 gboolean dynamicConnectionList_isEmpty(DynamicConnectionList* list){
 	return list->size == 0;
+}
+
+gboolean dynamicConnectionList_isHostNotRegistered(DynamicConnectionList* list, gchar* host){
+	DynamicConnectionListElement* elem = list->head;
+	
+	while (elem){
+		gchar* currentHost = elem->connection->host;
+		if (strcmp(currentHost, host)==0){
+			g_print ("Host is already registered: %s.\n", host);
+			return FALSE;
+		}
+		elem = elem->next;
+	}
+	return TRUE;
 }
 
 #endif
