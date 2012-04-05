@@ -187,6 +187,43 @@ void linkRtpBin_PAD_REMOVED_callback(){
 	g_signal_connect (rtpBin, "pad-removed", G_CALLBACK (rtpBinPadRemoved), NULL);
 }
 
+
+void print_single_peer (GObject* source){
+	GstStructure* stats;
+
+	g_object_get (source, "stats", &stats, NULL);
+
+	const GValue* val = gst_structure_get_value(stats, "rtp-from");
+
+	if (val){
+		g_print ("rtp-peer: %s\n", g_strdup_value_contents (val));
+	}	
+
+	gst_structure_free (stats);
+}
+
+void  print_peers (GstElement * rtpbin){
+	GObject *session;
+	GValueArray *arr;
+	GValue *val;
+	guint i;
+
+	g_signal_emit_by_name (rtpbin, "get-internal-session", 0, &session);
+	g_object_get (session, "sources", &arr, NULL);
+
+	for (i = 0; i < arr->n_values; i++) {
+		GObject *source;
+
+		val = g_value_array_get_nth (arr, i);
+		source = (GObject *)g_value_get_object (val);
+      
+		print_single_peer(source);
+	}
+	
+	g_value_array_free (arr);
+	g_object_unref (session);
+}
+
 static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user_data){
 	g_print ("New payload on pad: %s\n", GST_PAD_NAME (new_pad));
 
@@ -211,6 +248,8 @@ static void rtpBinPadAdded (GstElement * rtpbin, GstPad * new_pad, gpointer user
 	pipeline_run();
 
 	registerConnection(new_pad, rtpDecoder);
+
+	print_peers(rtpBin);
 }
 
 GstElement* createRtpDecoder(){
