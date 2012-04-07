@@ -330,7 +330,7 @@ gchar* getOneNewHost (){
 
 		if (dynamicConnectionList_isHostNotRegistered(&connectionList, socketDescr)){
 			tokens = g_strsplit(socketDescr,":",0);
-			int len = g_utf8_strlen(tokens[0], -1)-1;
+			int len = g_utf8_strlen(tokens[0], -1);
 			host = malloc(len*sizeof(gchar));
 			g_utf8_strncpy(host, tokens[0]+1, len);
 			break;
@@ -487,6 +487,7 @@ static void rtpBinPadRemoved (GstElement * rtpbin, GstPad * pad, gpointer user_d
 
 	GstElement* decoderBin = dCon->decoderBin;
 	GstElement* outputBin  = dCon->outputBin;
+	free(dCon->host);
 	free(dCon);
 
 	pipeline_pause();
